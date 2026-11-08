@@ -123,6 +123,32 @@ function run(command, args, options = {}) {
   return result.status ?? 1;
 }
 
+function findSigntool() {
+  const kitsBin = path.join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Windows Kits", "10", "bin");
+  if (!fs.existsSync(kitsBin)) return null;
+  const versions = fs
+    .readdirSync(kitsBin)
+    .filter((entry) => /^\d+\./.test(entry))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  for (const version of versions) {
+    const candidate = path.join(kitsBin, version, "x64", "signtool.exe");
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+// node.exe is signed and the signature no longer matches once the blob is injected. Removing it is
+// optional: the executable still runs with an invalid signature.
+function removeSignature(file) {
+  if (process.platform !== "win32") return;
+  const signtool = findSigntool();
+  if (!signtool) {
+    console.warn("signtool not found; keeping the original signature");
+    return;
+  }
+  if (run(signtool, ["remove", "/s", file]) !== 0) console.warn("signtool could not remove the signature");
+}
+
 function buildExecutable(workDir, assets, outFile) {
   const launcher = path.join(here, "launcher.cjs");
   const blob = path.join(workDir, "sea-prep.blob");
