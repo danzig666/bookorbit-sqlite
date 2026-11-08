@@ -8,6 +8,11 @@ on:
       - "packaging/windows/**"
       - ".github/workflows/windows-portable.yml"
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: Publish a release with this version (for example 0.1.0). Leave empty to only build.
+        required: false
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -32,7 +37,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     permissions:
-      # Publishing a release on a windows-v* tag needs write access.
+      # Publishing a release (and creating its windows-v* tag) needs write access.
       contents: write
     steps:
       - name: Checkout
@@ -41,13 +46,25 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/windows-v* ]]; then
+          publish=false
+          if [[ -n "$RELEASE_VERSION" ]]; then
+            if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+              echo "release_version must look like 1.2.3" >&2
+              exit 1
+            fi
+            version="$RELEASE_VERSION"
+            publish=true
+          elif [[ "$GITHUB_REF" == refs/tags/windows-v* ]]; then
             version="${GITHUB_REF#refs/tags/windows-v}"
+            publish=true
           else
             version="0.0.0-dev.${GITHUB_SHA::7}"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js and pnpm
         uses: ./.github/actions/setup-node-pnpm
@@ -257,12 +274,11 @@ jobs:
           retention-days: 14
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/windows-v')
+        if: steps.version.outputs.publish == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ github.ref_name }}
         run: |
           cat > notes.md <<EOF
           - Portable single-file Windows x64 build, no Docker or separate database install needed
@@ -273,7 +289,8 @@ jobs:
           - The first-run setup token is printed in the console window and stored in \`bookorbit.env\`
           - DjVu files are not supported in the portable build
           EOF
-          gh release create "$TAG" dist-portable/*.exe \
+          gh release create "windows-v${VERSION}" dist-portable/*.exe \
             --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "BookOrbit ${VERSION} for Windows (portable)" \
             --notes-file notes.md
