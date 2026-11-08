@@ -33,6 +33,7 @@ describe('KepubifyBinaryService', () => {
       ['linux', 'arm64', 'kepubify-linux-arm64'],
       ['linux', 'arm', 'kepubify-linux-arm'],
       ['linux', 'ia32', 'kepubify-linux-32bit'],
+      ['win32', 'x64', 'kepubify-windows-64bit.exe'],
     ])('platform=%s arch=%s → %s', (platform, arch, expected) => {
       const service = makeService();
       vi.spyOn(process, 'platform', 'get').mockReturnValue(platform as NodeJS.Platform);
@@ -43,7 +44,7 @@ describe('KepubifyBinaryService', () => {
     it('throws for unsupported platforms', () => {
       const service = makeService();
       vi.spyOn(process, 'platform', 'get').mockReturnValue('win32' as NodeJS.Platform);
-      vi.spyOn(process, 'arch', 'get').mockReturnValue('x64');
+      vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64');
       expect(() => (service as any).detectBinaryName()).toThrow('Unsupported platform');
     });
   });

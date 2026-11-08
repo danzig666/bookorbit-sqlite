@@ -64,6 +64,9 @@ export class KepubifyBinaryService {
       if (arch === 'x64') return 'kepubify-linux-64bit';
       return 'kepubify-linux-32bit';
     }
+    if (platform === 'win32' && arch === 'x64') {
+      return 'kepubify-windows-64bit.exe';
+    }
     throw new Error(`Unsupported platform for kepubify: ${platform} / ${arch}`);
   }
 }
