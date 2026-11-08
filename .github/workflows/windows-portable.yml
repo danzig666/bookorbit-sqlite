@@ -255,6 +255,62 @@ jobs:
 
           $index = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:6262/
           if ($index.Content -notmatch '<div id="app"') { Show-Logs 'first'; Stop-All; throw 'Client page was not served' }
+
+          function Fail([string]$message) { Show-Logs 'first'; Stop-All; throw $message }
+          $api = 'http://127.0.0.1:6262/api/v1'
+
+          $launcherOut = Get-Content "$testDir/first.out" -Raw
+          if ($launcherOut -notmatch '/setup#setup-token=') { Fail 'Launcher did not offer the setup page with the token filled in' }
+          $status = Invoke-RestMethod "$api/auth/setup-status"
+          if (-not $status.needsSetup) { Fail 'Expected a fresh install to need setup' }
+
+          $setupBody = @{ username = 'admin'; name = 'Admin'; email = 'admin@mail.com'; password = 'Sm0keTestPassw0rd' } | ConvertTo-Json
+          $session = Invoke-RestMethod -Method Post "$api/auth/setup" -ContentType 'application/json' -Body $setupBody `
+            -Headers @{ 'x-setup-token' = $settings['SETUP_BOOTSTRAP_TOKEN'] }
+          $auth = @{ Authorization = "Bearer $($session.accessToken)" }
+
+          $drives = Invoke-RestMethod "$api/path/listing?path=%2F" -Headers $auth
+          $driveNames = ($drives.entries | ForEach-Object { $_.path }) -join ', '
+          Write-Host "Drives listed by the folder picker: $driveNames"
+          if ($driveNames -notmatch 'C:\\' -or $driveNames -notmatch 'D:\\') { Fail 'Folder picker did not list the C: and D: drives' }
+
+          $books = Join-Path $env:RUNNER_TEMP 'smoke books\Library'
+          New-Item -ItemType Directory -Force $books | Out-Null
+          Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::Open((Join-Path $books 'Smoke Test Book.epub'), 'Create')
+          function Add-ZipText([string]$name, [string]$text, $level = [System.IO.Compression.CompressionLevel]::Optimal) {
+            $writer = New-Object System.IO.StreamWriter(($zip.CreateEntry($name, $level)).Open())
+            $writer.Write($text)
+            $writer.Dispose()
+          }
+          Add-ZipText 'mimetype' 'application/epub+zip' ([System.IO.Compression.CompressionLevel]::NoCompression)
+          Add-ZipText 'META-INF/container.xml' '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
+          Add-ZipText 'content.opf' '<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">smoke-1</dc:identifier><dc:title>Smoke Test Book</dc:title><dc:creator>Test Author</dc:creator><dc:language>en</dc:language></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="c"/></spine></package>'
+          Add-ZipText 'c.xhtml' '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body><p>Hello</p></body></html>'
+          Add-ZipText 'nav.xhtml' '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>n</title></head><body><nav epub:type="toc"><ol><li><a href="c.xhtml">c</a></li></ol></nav></body></html>'
+          $zip.Dispose()
+
+          $parent = Split-Path $books -Parent
+          $listing = Invoke-RestMethod "$api/path/listing?path=$([uri]::EscapeDataString($parent))" -Headers $auth
+          if (-not ($listing.entries | Where-Object { $_.path -eq $books })) { Fail "Folder picker did not list $books" }
+
+          $libraryBody = @{ name = 'Smoke'; icon = 'book'; folders = @($books) } | ConvertTo-Json
+          $library = Invoke-RestMethod -Method Post "$api/libraries" -ContentType 'application/json' -Body $libraryBody -Headers $auth
+          $total = 0
+          for ($i = 0; $i -lt 60 -and $total -lt 1; $i++) {
+            Start-Sleep -Seconds 3
+            $total = (Invoke-RestMethod "$api/libraries/$($library.id)/stats" -Headers $auth).totalBooks
+          }
+          Write-Host "Books scanned from ${books}: $total"
+          if ($total -ne 1) { Fail 'The library on a Windows drive path did not scan its book' }
+
+          $unc = '\\localhost\' + $books.Substring(0, 1) + '$' + $books.Substring(2)
+          try {
+            $uncListing = Invoke-RestMethod "$api/path/listing?path=$([uri]::EscapeDataString((Split-Path $unc -Parent)))" -Headers $auth
+            Write-Host "Network path $unc listing state: $($uncListing.state), entries: $($uncListing.entries.Count)"
+          } catch {
+            Write-Host "Network path listing not available on this runner: $($_.Exception.Message)"
+          }
           Show-Logs 'first'
           Stop-All
 

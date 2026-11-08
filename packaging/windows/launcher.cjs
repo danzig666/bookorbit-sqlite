@@ -277,8 +277,9 @@ function defaultSettingsFile() {
     "HOST=0.0.0.0",
     `APP_URL=http://localhost:${DEFAULT_APP_PORT}`,
     "",
-    "# Folder the library picker starts from. Point it at the drive or folder that holds your books,",
-    "# for example D:\\Books. Defaults to the root of the drive BookOrbit runs from.",
+    "# Folders the library picker may open. Leave empty to allow every drive, mapped network drive",
+    "# and network share (\\\\server\\share). To restrict it, list folders separated by ;",
+    "# for example D:\\Books;G:\\BT\\eBook",
     "LIBRARY_BROWSE_ROOT=",
     "",
     "# Set to false to stop BookOrbit from opening a browser window on start.",
@@ -516,13 +517,12 @@ function buildServerEnv(runtimeDir, home, settings, database, appPort) {
   const toolDirs = ["ffmpeg", "poppler"].map((tool) => path.join(runtimeDir, "tools", tool, "bin")).filter((dir) => fs.existsSync(dir));
   const env = withPath({ ...process.env }, [...toolDirs, path.join(runtimeDir, "node")]);
 
-  const browseRoot = settings.LIBRARY_BROWSE_ROOT?.trim() || path.parse(home).root;
   Object.assign(env, settings, {
     NODE_ENV: "production",
     PORT: String(appPort),
     DATABASE_URL: database.connectionString(),
     APP_DATA_PATH: settings.APP_DATA_PATH?.trim() || path.join(home, "data"),
-    LIBRARY_BROWSE_ROOT: browseRoot,
+    LIBRARY_BROWSE_ROOT: settings.LIBRARY_BROWSE_ROOT?.trim() ?? "",
     KOREADER_PLUGIN_PATH: settings.KOREADER_PLUGIN_PATH?.trim() || path.join(appDir, "koreader-plugin", "bookorbit.koplugin"),
     APP_VERSION: settings.APP_VERSION?.trim() || process.env.APP_VERSION || "",
   });
@@ -572,6 +572,34 @@ function startServer(runtimeDir, home, env, heapMb) {
   return child;
 }
 
+function getJson(port, requestPath) {
+  return new Promise((resolve) => {
+    const request = http.get({ host: "127.0.0.1", port, path: requestPath, timeout: 5000 }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+      });
+      response.on("end", () => {
+        try {
+          resolve(response.statusCode === 200 ? JSON.parse(body) : null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    request.on("timeout", () => request.destroy());
+    request.on("error", () => resolve(null));
+  });
+}
+
+/** The page to open: the first-run setup form with its token filled in, or the app itself. */
+async function startPageUrl(port, baseUrl, setupToken) {
+  const status = await getJson(port, "/api/v1/auth/setup-status");
+  if (!status?.needsSetup || !setupToken) return baseUrl;
+  return `${baseUrl}/setup#setup-token=${encodeURIComponent(setupToken)}`;
+}
+
 function checkHealth(port) {
   return new Promise((resolve) => {
     const request = http.get({ host: "127.0.0.1", port, path: "/api/v1/health", timeout: 5000 }, (response) => {
@@ -595,7 +623,8 @@ async function waitForHealth(port, child) {
 
 function openBrowser(url) {
   try {
-    if (IS_WINDOWS) spawn("explorer.exe", [url], { detached: true, stdio: "ignore" }).unref();
+    // url.dll keeps the #fragment that carries the setup token; explorer.exe can drop it.
+    if (IS_WINDOWS) spawn("rundll32.exe", ["url.dll,FileProtocolHandler", url], { detached: true, stdio: "ignore" }).unref();
     else
       spawn("xdg-open", [url], { detached: true, stdio: "ignore" })
         .on("error", () => {})
@@ -697,11 +726,12 @@ async function main() {
 
     if (sea) removeOldRuntimes(home, manifest.version);
     const url = `http://localhost:${appPort}`;
+    const startUrl = await startPageUrl(appPort, url, settings.SETUP_BOOTSTRAP_TOKEN);
     log(`BookOrbit is running at ${url}`);
-    log(`First-time setup token: ${settings.SETUP_BOOTSTRAP_TOKEN ?? "(see settings file)"}`);
+    if (startUrl !== url) log(`First start: create your admin account at ${startUrl}`);
     log(`Settings: ${settingsPath}`);
     log("Close this window or press Ctrl+C to stop BookOrbit.");
-    if (!args.noBrowser && isTruthy(process.env.BOOKORBIT_OPEN_BROWSER ?? settings.OPEN_BROWSER, true)) openBrowser(url);
+    if (!args.noBrowser && isTruthy(process.env.BOOKORBIT_OPEN_BROWSER ?? settings.OPEN_BROWSER, true)) openBrowser(startUrl);
   } catch (error) {
     if (server && server.exitCode === null) server.kill();
     database.stop();
