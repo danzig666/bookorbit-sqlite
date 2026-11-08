@@ -63,6 +63,10 @@ jobs:
           else
             version="0.0.0-dev.${GITHUB_SHA::7}"
           fi
+          if [[ "$publish" == true ]] && ! grep -qx "## $version" packaging/windows/CHANGELOG.md; then
+            echo "Add a '## $version' bullet list to packaging/windows/CHANGELOG.md before releasing" >&2
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
@@ -336,15 +340,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cat > notes.md <<EOF
-          - Portable single-file Windows x64 build, no Docker or separate database install needed
-          - Embedded PostgreSQL ${POSTGRES_VERSION%-*} with pgvector ${PGVECTOR_VERSION}, pg_trgm and unaccent
-          - Bundled kepubify ${KEPUBIFY_VERSION}, FFmpeg (LGPL build) and Poppler ${POPPLER_VERSION}
-          - All data (database, covers, settings, logs) lives in \`BookOrbit-data\` next to the executable
-          - Settings such as \`PORT\` and \`LIBRARY_BROWSE_ROOT\` are in \`BookOrbit-data\\bookorbit.env\`
-          - The first-run setup token is printed in the console window and stored in \`bookorbit.env\`
-          - DjVu files are not supported in the portable build
-          EOF
+          # The release notes are this version's bullet list from packaging/windows/CHANGELOG.md.
+          awk -v version="$VERSION" '
+            /^## / { inside = ($2 == version); next }
+            inside && /^- / { print }
+          ' packaging/windows/CHANGELOG.md > notes.md
+          if [[ ! -s notes.md ]]; then
+            echo "packaging/windows/CHANGELOG.md has no bullet list for $VERSION" >&2
+            exit 1
+          fi
           gh release create "windows-v${VERSION}" dist-portable/*.exe \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
