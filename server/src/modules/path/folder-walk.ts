@@ -33,6 +33,27 @@ export const SYSTEM_FOLDERS = new Set([
   'private',
 ]);
 
+/** Windows folders directly under a drive root, hidden from the picker unless asked for. */
+export const WINDOWS_SYSTEM_FOLDERS = new Set([
+  '$Recycle.Bin',
+  '$WinREAgent',
+  'Config.Msi',
+  'Documents and Settings',
+  'PerfLogs',
+  'Program Files',
+  'Program Files (x86)',
+  'ProgramData',
+  'Recovery',
+  'System Volume Information',
+  'Windows',
+]);
+
+/** An operating-system folder directly under the filesystem root (`/` or a Windows drive root). */
+export function isSystemFolder(parent: string, name: string): boolean {
+  if (parent === sep) return SYSTEM_FOLDERS.has(name);
+  return /^[A-Za-z]:[\\/]$/.test(parent) && WINDOWS_SYSTEM_FOLDERS.has(name);
+}
+
 export function isBlockedPath(path: string): boolean {
   return BLOCKED_PATHS.some((blocked) => path === blocked || path.startsWith(blocked + sep));
 }
@@ -53,7 +74,8 @@ export async function isBlockedTarget(path: string): Promise<boolean> {
 
 export function isInsideOrAt(path: string, parent: string): boolean {
   if (path === parent) return true;
-  return parent === sep ? path.startsWith(sep) : path.startsWith(parent + sep);
+  // A root such as `/` or `D:\` already ends with the separator.
+  return parent.endsWith(sep) ? path.startsWith(parent) : path.startsWith(parent + sep);
 }
 
 /** A folder BookOrbit lists: a real directory, not hidden, not a symlink, not a blocked system path. */

@@ -2,11 +2,11 @@ import type { FolderInspection, FolderSummary, UnclaimedFolder, UnclaimedFolders
 import { Injectable, Logger } from '@nestjs/common';
 import type { Dirent } from 'fs';
 import { readdir, realpath } from 'fs/promises';
-import { dirname, join, resolve, sep } from 'path';
+import { dirname, join, resolve } from 'path';
 
 import { sanitizeLogValue } from '../../common/utils/log-sanitize.utils';
 import { isPrimaryFormat } from '../scanner/lib/classify';
-import { isBlockedPath, isInsideOrAt, isListableDirectory, mapLimit, realTarget, SYSTEM_FOLDERS, walkFolder, type WalkOutcome } from './folder-walk';
+import { isBlockedPath, isInsideOrAt, isListableDirectory, isSystemFolder, mapLimit, realTarget, walkFolder, type WalkOutcome } from './folder-walk';
 import { PathPolicyService } from './path-policy.service';
 import { PathRepository } from './path.repository';
 import { PathService } from './path.service';
@@ -219,7 +219,7 @@ export class FolderInsightService {
         for (const entry of dirents) {
           const full = join(dir, entry.name);
           if (isListableDirectory(entry, full)) {
-            if (dir === sep && SYSTEM_FOLDERS.has(entry.name)) continue;
+            if (isSystemFolder(dir, entry.name)) continue;
             const childReal = join(real, entry.name);
             if (inAppData(full, childReal) || isBlockedPath(childReal)) continue;
             node.children.push(full);

@@ -4,23 +4,33 @@ import { realpath } from 'fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 
 import { storageConfig } from '../../config/config';
+import { IS_WINDOWS, isVirtualRoot, isWindowsAbsolutePath, listWindowsDrives, WINDOWS_VIRTUAL_ROOT } from './windows-roots';
 
 const MAX_BROWSE_PATH_LENGTH = 4096;
 
 @Injectable()
 export class PathPolicyService {
   private readonly browseRoot: string;
+  /** Windows only: configured roots; empty allows every drive and network share. */
+  private readonly windowsRoots: string[];
   private readonly appDataPath: string | null;
   private canonicalBrowseRootPromise: Promise<string> | null = null;
   private canonicalAppDataPathPromise: Promise<string | null> | null = null;
+  private readonly canonicalWindowsRoots = new Map<string, Promise<string>>();
 
   constructor(@Inject(storageConfig.KEY) storage: ConfigType<typeof storageConfig>) {
-    this.browseRoot = resolve(storage.libraryBrowseRoot);
+    this.windowsRoots = IS_WINDOWS ? (storage.libraryBrowseRoots ?? []) : [];
+    this.browseRoot = IS_WINDOWS ? WINDOWS_VIRTUAL_ROOT : resolve(storage.libraryBrowseRoot);
     this.appDataPath = storage.appDataPath ? resolve(storage.appDataPath) : null;
   }
 
   getBrowseRoot(): string {
     return this.browseRoot;
+  }
+
+  /** The folders shown at the Windows top level: the configured roots, or every drive that answers. */
+  async listWindowsRoots(): Promise<string[]> {
+    return this.windowsRoots.length > 0 ? this.windowsRoots : listWindowsDrives();
   }
 
   getAppDataPath(): string | null {
@@ -38,6 +48,11 @@ export class PathPolicyService {
     const inputPath = typeof rawPath === 'string' ? rawPath.trim() : '';
     if (inputPath.length > MAX_BROWSE_PATH_LENGTH) throw new BadRequestException('Path is too long');
 
+    if (IS_WINDOWS) {
+      if (isVirtualRoot(inputPath)) throw new BadRequestException('Choose a drive or folder');
+      if (!isWindowsAbsolutePath(inputPath)) throw new BadRequestException('Enter a full path, for example D:\\Books or \\\\server\\share');
+    }
+
     const path = resolve(inputPath || this.browseRoot);
     await this.assertWithinBrowseRoot(path);
     return path;
@@ -53,6 +68,7 @@ export class PathPolicyService {
 
   async isWithinBrowseRoot(rawPath: string): Promise<boolean> {
     if (typeof rawPath !== 'string' || rawPath.length > MAX_BROWSE_PATH_LENGTH) return false;
+    if (IS_WINDOWS) return this.isWithinWindowsRoots(rawPath);
 
     return this.isWithinRoot(rawPath, this.browseRoot, await this.getCanonicalBrowseRoot());
   }
@@ -99,6 +115,20 @@ export class PathPolicyService {
       canonicalRelativePath === '' ||
       (!canonicalRelativePath.startsWith(`..${sep}`) && canonicalRelativePath !== '..' && !isAbsolute(canonicalRelativePath))
     );
+  }
+
+  private async isWithinWindowsRoots(rawPath: string): Promise<boolean> {
+    if (!isWindowsAbsolutePath(rawPath)) return false;
+    if (this.windowsRoots.length === 0) return true;
+    for (const root of this.windowsRoots) {
+      let canonical = this.canonicalWindowsRoots.get(root);
+      if (!canonical) {
+        canonical = canonicalizeWithExistingAncestor(root);
+        this.canonicalWindowsRoots.set(root, canonical);
+      }
+      if (await this.isWithinRoot(rawPath, root, await canonical)) return true;
+    }
+    return false;
   }
 
   private getCanonicalBrowseRoot(): Promise<string> {

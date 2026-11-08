@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { readdir, rm, stat } from 'fs/promises';
-import { join } from 'path';
+import { join, sep } from 'path';
 
 import { DEFAULT_FORMAT_PRIORITY, resolveRegexMetadataConfig } from '@bookorbit/types';
 import type {
@@ -650,7 +650,7 @@ function normalizeLibraryOrganizationMode<T extends Record<string, unknown>>(lib
 }
 
 function pathsOverlap(a: string, b: string): boolean {
-  const normalize = (path: string) => (path.endsWith('/') ? path : `${path}/`);
+  const normalize = (path: string) => (path.endsWith(sep) ? path : `${path}${sep}`);
   const left = normalize(a);
   const right = normalize(b);
   return left.startsWith(right) || right.startsWith(left);

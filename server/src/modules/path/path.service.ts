@@ -28,13 +28,14 @@ import {
   isBlockedTarget,
   isInsideOrAt,
   isListableDirectory,
+  isSystemFolder,
   mapLimit,
   realTarget,
   stateForError,
-  SYSTEM_FOLDERS,
 } from './folder-walk';
 import { PathPolicyService } from './path-policy.service';
 import { PathRepository } from './path.repository';
+import { IS_WINDOWS, isVirtualRoot, WINDOWS_VIRTUAL_ROOT } from './windows-roots';
 
 /** Past this many folders, children are not opened to learn whether they have their own. */
 const HAS_CHILDREN_CHECK_LIMIT = 400;
@@ -63,6 +64,9 @@ export class PathService {
   }
 
   async listDirectories(rawPath?: string): Promise<DirectoryEntry[]> {
+    if (isVirtualRoot(rawPath)) {
+      return (await this.pathPolicy.listWindowsRoots()).map((root) => ({ name: windowsRootName(root), path: root }));
+    }
     const browseRoot = resolve(this.pathPolicy.getBrowseRoot());
     const resolved = resolve(await this.pathPolicy.resolveBrowsePath(rawPath));
     const relativePath = relative(browseRoot, resolved);
@@ -91,6 +95,7 @@ export class PathService {
 
   async createDirectory(rawParent: string, rawName: string): Promise<CreateFolderResult> {
     const name = this.assertSafeName(rawName);
+    if (isVirtualRoot(rawParent)) throw new ForbiddenException('Choose a drive or folder to create the folder in');
     const browseRoot = resolve(this.pathPolicy.getBrowseRoot());
     const parent = resolve(await this.pathPolicy.resolveBrowsePath(rawParent));
     const relativeParent = relative(browseRoot, parent);
@@ -135,6 +140,7 @@ export class PathService {
    * that cannot be read says so instead of looking empty.
    */
   async listFolder(rawPath?: string): Promise<FolderListing> {
+    if (isVirtualRoot(rawPath)) return this.listWindowsRoots();
     const resolved = resolve(await this.pathPolicy.resolveBrowsePath(rawPath));
     const blocked: FolderListing = { path: resolved, state: 'blocked', entries: [], truncated: false };
     if (await this.isBlocked(resolved)) return blocked;
@@ -178,7 +184,7 @@ export class PathService {
         name: entry.name,
         path: full,
         mount,
-        system: resolved === sep && SYSTEM_FOLDERS.has(entry.name),
+        system: isSystemFolder(resolved, entry.name),
         appData: isAppData(full, entry.name),
         hasChildren: inspectChildren ? await hasListableChild(full) : null,
       };
@@ -188,16 +194,17 @@ export class PathService {
 
   /** Folders whose name contains `query`, breadth-first below `rawPath`, within fixed bounds. */
   async searchFolders(query: string, rawPath?: string, includeSystem = false): Promise<FolderSearchResult> {
-    const root = resolve(await this.pathPolicy.resolveBrowsePath(rawPath));
+    const virtualRoot = isVirtualRoot(rawPath);
+    const roots = virtualRoot ? await this.pathPolicy.listWindowsRoots() : [resolve(await this.pathPolicy.resolveBrowsePath(rawPath))];
     // Names are compared composed and case-folded the same way on every server, whatever its locale.
     const fold = (name: string) => name.normalize('NFC').toLowerCase();
     const needle = fold(query.trim());
     const results: string[] = [];
-    if (!needle || (await this.isBlocked(root))) return { results, truncated: false };
+    if (!needle || (!virtualRoot && (await this.isBlocked(roots[0]!)))) return { results, truncated: false };
 
     const deadline = Date.now() + SEARCH_BUDGET_MS;
     // Each folder travels with its real path, so a symlink in the start path cannot lead into a blocked folder.
-    let queue = [{ dir: root, real: await realTarget(root) }];
+    let queue = await Promise.all(roots.map(async (root) => ({ dir: root, real: await realTarget(root) })));
     let entries = 0;
     for (let depth = 0; depth < SEARCH_MAX_DEPTH && queue.length > 0; depth++) {
       const next: typeof queue = [];
@@ -215,7 +222,7 @@ export class PathService {
           const full = join(dir, entry.name);
           const childReal = join(real, entry.name);
           if (!isListableDirectory(entry, full) || isBlockedPath(childReal)) continue;
-          if (!includeSystem && dir === sep && SYSTEM_FOLDERS.has(entry.name)) continue;
+          if (!includeSystem && isSystemFolder(dir, entry.name)) continue;
           if (fold(entry.name).includes(needle)) {
             results.push(full);
             if (results.length >= SEARCH_MAX_RESULTS) return { results, truncated: true };
@@ -231,9 +238,46 @@ export class PathService {
 
   /** Where a picker starts: mounted folders near the browse root, the data folder, every library's folders. */
   async getPlaces(): Promise<FolderPlaces> {
+    if (IS_WINDOWS) return this.getWindowsPlaces();
     const root = resolve(this.pathPolicy.getBrowseRoot());
     const appDataPath = await this.pathPolicy.getCanonicalAppDataPath();
     const mounts = await this.findMounts(root);
+    const libraries = await this.pickerLibraries();
+
+    return {
+      root,
+      mounts: mounts.length > 0 || root === sep ? mounts : [root],
+      appDataPath: appDataPath && isInsideOrAt(appDataPath, root) ? appDataPath : null,
+      libraries,
+    };
+  }
+
+  private async getWindowsPlaces(): Promise<FolderPlaces> {
+    const roots = await this.pathPolicy.listWindowsRoots();
+    const appDataPath = await this.pathPolicy.getCanonicalAppDataPath();
+    return {
+      root: WINDOWS_VIRTUAL_ROOT,
+      mounts: roots,
+      appDataPath: appDataPath && (await this.pathPolicy.isWithinBrowseRoot(appDataPath)) ? appDataPath : null,
+      libraries: await this.pickerLibraries(),
+    };
+  }
+
+  /** The Windows top level: one entry per drive or configured root. Drives are not opened here, so a slow network drive does not stall the picker. */
+  private async listWindowsRoots(): Promise<FolderListing> {
+    const roots = await this.pathPolicy.listWindowsRoots();
+    const entries: FolderListingEntry[] = roots.map((root) => ({
+      name: windowsRootName(root),
+      path: root,
+      mount: true,
+      system: false,
+      appData: false,
+      hasChildren: true,
+    }));
+    return { path: WINDOWS_VIRTUAL_ROOT, state: 'ok', entries, truncated: false };
+  }
+
+  private async pickerLibraries(): Promise<FolderPickerLibrary[]> {
     const rows = (await this.pathRepository?.findLibraryFolders()) ?? [];
     const libraries = new Map<number, FolderPickerLibrary>();
     for (const row of rows) {
@@ -241,13 +285,7 @@ export class PathService {
       library.folders.push(row.path);
       libraries.set(row.libraryId, library);
     }
-
-    return {
-      root,
-      mounts: mounts.length > 0 || root === sep ? mounts : [root],
-      appDataPath: appDataPath && isInsideOrAt(appDataPath, root) ? appDataPath : null,
-      libraries: [...libraries.values()],
-    };
+    return [...libraries.values()];
   }
 
   /**
@@ -267,7 +305,7 @@ export class PathService {
         return;
       }
       dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-      const dirs = dirents.filter((entry) => isListableDirectory(entry, join(dir, entry.name)) && !(dir === sep && SYSTEM_FOLDERS.has(entry.name)));
+      const dirs = dirents.filter((entry) => isListableDirectory(entry, join(dir, entry.name)) && !isSystemFolder(dir, entry.name));
       for (const entry of dirs.slice(0, MOUNT_SCAN_FOLDERS_PER_LEVEL)) {
         if (stats++ >= MOUNT_SCAN_MAX_STATS) return;
         const full = join(dir, entry.name);
@@ -324,6 +362,11 @@ export class PathService {
         return new InternalServerErrorException('Could not create the folder');
     }
   }
+}
+
+/** `D:\` is shown as `D:`; a configured root or share keeps its full path. */
+function windowsRootName(root: string): string {
+  return /^[A-Za-z]:\\$/.test(root) ? root.slice(0, 2) : root;
 }
 
 function getErrorCode(error: unknown): string | undefined {

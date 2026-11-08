@@ -33,6 +33,14 @@ export const authConfig = registerAs('auth', () => ({
   passwordLoginEnabled: !parseBooleanFlag(process.env.DISABLE_LOCAL_AUTH, false),
 }));
 
+/** `LIBRARY_BROWSE_ROOT` on Windows: one or more roots separated by `;`. */
+function parseWindowsRoots(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(';')
+    .map((root) => root.trim())
+    .filter((root) => root.length > 0);
+}
+
 export const storageConfig = registerAs('storage', () => {
   const appDataPath = resolve(process.env.APP_DATA_PATH ?? '/data');
   const bookDockPath = process.env.BOOK_DOCK_PATH?.trim();
@@ -42,6 +50,8 @@ export const storageConfig = registerAs('storage', () => {
     appDataPath,
     bookDockPath: resolve(bookDockPath || join(appDataPath, 'book-dock')),
     libraryBrowseRoot: resolve(libraryBrowseRoot || '/'),
+    /** Windows only: the folder picker roots. Empty allows every drive and network share. */
+    libraryBrowseRoots: process.platform === 'win32' ? parseWindowsRoots(libraryBrowseRoot).map((root) => resolve(root)) : [],
   };
 });
 

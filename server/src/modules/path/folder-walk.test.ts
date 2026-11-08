@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { findBookCandidates, findLooseFileCandidates } from '../scanner/lib/walk';
-import { hasListableChild, isBlockedPath, isBlockedTarget, isInsideOrAt, mapLimit, walkFolder } from './folder-walk';
+import { hasListableChild, isBlockedPath, isBlockedTarget, isInsideOrAt, isSystemFolder, mapLimit, walkFolder } from './folder-walk';
 
 const runningAsRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
@@ -222,6 +222,17 @@ describe('folder-walk helpers', () => {
     expect(isInsideOrAt('/books', '/books')).toBe(true);
     expect(isInsideOrAt('/bookshelf', '/books')).toBe(false);
     expect(isInsideOrAt('/anything', '/')).toBe(true);
+    expect(isInsideOrAt('/books/', '/books/')).toBe(true);
+    expect(isInsideOrAt('/books/Ebooks', '/books/')).toBe(true);
+  });
+
+  it('marks operating-system folders directly under the root or a Windows drive root', () => {
+    expect(isSystemFolder('/', 'usr')).toBe(true);
+    expect(isSystemFolder('/books', 'usr')).toBe(false);
+    expect(isSystemFolder('C:\\', 'Windows')).toBe(true);
+    expect(isSystemFolder('D:/', 'Program Files')).toBe(true);
+    expect(isSystemFolder('D:\\Books', 'Windows')).toBe(false);
+    expect(isSystemFolder('D:\\', 'Books')).toBe(false);
   });
 
   it('finds whether a folder has a listable folder inside', async () => {
