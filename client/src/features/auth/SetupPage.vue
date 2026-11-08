@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CircleAlert } from '@lucide/vue'
 import AuthAlert from './components/AuthAlert.vue'
@@ -17,9 +17,23 @@ const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const setupToken = ref('')
+/** The token arrived with the link (the Windows portable build opens one), so the field is not shown. */
+const tokenFromLink = ref(false)
 
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// The token travels in the fragment, which the browser never sends to the server or writes into its logs.
+function readTokenFromLink() {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+  const token = params.get('setup-token')?.trim()
+  if (!token) return
+  setupToken.value = token
+  tokenFromLink.value = true
+  window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+}
+
+onMounted(readTokenFromLink)
 
 async function handleSubmit() {
   error.value = null
@@ -74,7 +88,14 @@ async function handleSubmit() {
         required
         :disabled="loading"
       />
-      <AuthField id="setup-token" v-model="setupToken" :label="t('auth.setup.setupToken')" autocomplete="off" :disabled="loading">
+      <AuthField
+        v-if="!tokenFromLink"
+        id="setup-token"
+        v-model="setupToken"
+        :label="t('auth.setup.setupToken')"
+        autocomplete="off"
+        :disabled="loading"
+      >
         <template #aside>
           <span class="text-xs text-muted-foreground">{{ t('auth.setup.setupTokenHint') }}</span>
         </template>
