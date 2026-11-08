@@ -165,10 +165,7 @@ function buildExecutable(workDir, assets, outFile) {
 
   if (run(process.execPath, ["--experimental-sea-config", configPath]) === 0) {
     fs.copyFileSync(process.execPath, outFile);
-    if (process.platform === "win32") {
-      // node.exe is signed; the signature no longer matches once the blob is injected.
-      run("signtool", ["remove", "/s", outFile]);
-    }
+    removeSignature(outFile);
     const status = run("npx", ["--yes", "postject@1.0.0-alpha.6", outFile, "NODE_SEA_BLOB", blob, "--sentinel-fuse", SEA_FUSE]);
     if (status !== 0) throw new Error("postject failed");
     return;
