@@ -265,20 +265,13 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cat > notes.md <<EOF
-          Portable Windows build of BookOrbit with an embedded PostgreSQL ${POSTGRES_VERSION%-*} (pgvector ${PGVECTOR_VERSION}, pg_trgm, unaccent). No Docker or separate database install is needed.
-
-          ## How to use
-
-          1. Put \`BookOrbit-${VERSION}-windows-x64.exe\` in its own folder, for example \`D:\\BookOrbit\`.
-          2. Double-click it. The first start unpacks the runtime and creates the database, which takes a minute or two.
-          3. Your browser opens http://localhost:6262. Enter the setup token printed in the console window (also stored in \`BookOrbit-data\\bookorbit.env\`) to create the admin account.
-          4. Close the console window or press Ctrl+C to stop BookOrbit.
-
-          Everything BookOrbit stores lives in the \`BookOrbit-data\` folder next to the executable: the database, covers, settings and logs. Copy the executable and that folder together to move or back up the install (stop BookOrbit first).
-
-          Settings such as the port and the library folder picker root (\`LIBRARY_BROWSE_ROOT\`, for example \`D:\\Books\`) are in \`BookOrbit-data\\bookorbit.env\`.
-
-          Bundled tools: kepubify ${KEPUBIFY_VERSION}, FFmpeg (LGPL build), Poppler ${POPPLER_VERSION}. DjVu files are not supported in the portable build because DjVuLibre is not bundled.
+          - Portable single-file Windows x64 build, no Docker or separate database install needed
+          - Embedded PostgreSQL ${POSTGRES_VERSION%-*} with pgvector ${PGVECTOR_VERSION}, pg_trgm and unaccent
+          - Bundled kepubify ${KEPUBIFY_VERSION}, FFmpeg (LGPL build) and Poppler ${POPPLER_VERSION}
+          - All data (database, covers, settings, logs) lives in \`BookOrbit-data\` next to the executable
+          - Settings such as \`PORT\` and \`LIBRARY_BROWSE_ROOT\` are in \`BookOrbit-data\\bookorbit.env\`
+          - The first-run setup token is printed in the console window and stored in \`bookorbit.env\`
+          - DjVu files are not supported in the portable build
           EOF
           gh release create "$TAG" dist-portable/*.exe \
             --repo "$GITHUB_REPOSITORY" \
