@@ -6,7 +6,7 @@ import { Check, ChevronUp, FolderTree, Info, TriangleAlert, Undo2, X } from '@lu
 import type { OrganizationMode } from '@bookorbit/types'
 import { useModal } from '@/composables/useModal'
 import { formatList } from '@/i18n/formatters'
-import { consolidateFolderPaths, normalizeFolderPath } from '../composables/folder-paths'
+import { consolidateFolderPaths, folderSeparator, normalizeFolderPath } from '../composables/folder-paths'
 import { FOLDER_PICKER, type FolderPickerContext } from '../composables/folder-picker/folder-picker-context'
 import {
   ancestorsWithin,
@@ -307,12 +307,17 @@ function closeSheet() {
   sheetOpen.value = false
 }
 
+function withTrailingSeparator(path: string): string {
+  const separator = folderSeparator(path)
+  return path.endsWith(separator) ? path : `${path}${separator}`
+}
+
 function onPanelKeydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement
   const typing = target.matches('input[type=text], input:not([type]), textarea')
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') {
     event.preventDefault()
-    const from = tree.focus.value && tree.focus.value !== tree.root.value ? `${tree.focus.value}/` : '/'
+    const from = tree.focus.value && tree.focus.value !== tree.root.value ? withTrailingSeparator(tree.focus.value) : '/'
     treePane.value?.focusField(from)
   } else if (!typing && event.key === '/') {
     event.preventDefault()

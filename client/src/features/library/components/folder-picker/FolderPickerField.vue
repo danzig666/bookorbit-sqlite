@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Clock, CornerDownLeft, Folder, HardDrive, Library as LibraryIcon, Search, X } from '@lucide/vue'
 import AppIcon from '@/components/AppIcon.vue'
-import { normalizeFolderPath } from '../../composables/folder-paths'
+import { isAbsoluteFolderPath, normalizeFolderPath } from '../../composables/folder-paths'
 import { isAtOrInside, leafName, parentPath } from '../../composables/folder-picker/folder-picker-rules'
 import { useFolderPickerContext } from '../../composables/folder-picker/folder-picker-context'
 import { readRecentFolders } from '../../composables/folder-picker/recent-folders'
@@ -36,17 +36,21 @@ const recent = readRecentFolders()
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 let searchAbort: AbortController | null = null
 
-const mode = computed<'empty' | 'path' | 'find'>(() => (query.value.trim().startsWith('/') ? 'path' : query.value.trim() ? 'find' : 'empty'))
+const mode = computed<'empty' | 'path' | 'find'>(() => (isAbsoluteFolderPath(query.value.trim()) ? 'path' : query.value.trim() ? 'find' : 'empty'))
+
+function endsWithSeparator(typed: string): boolean {
+  return typed.endsWith('/') || typed.endsWith('\\')
+}
 
 const completionBase = computed(() => {
   const typed = query.value.trim()
-  return typed.endsWith('/') ? normalizeFolderPath(typed) : parentPath(typed)
+  return endsWithSeparator(typed) ? normalizeFolderPath(typed) : parentPath(typed)
 })
 
 const options = computed<Option[]>(() => {
   if (mode.value === 'path') {
     const typed = query.value.trim()
-    const stem = typed.endsWith('/') ? '' : leafName(typed).toLowerCase()
+    const stem = endsWithSeparator(typed) ? '' : leafName(typed).toLowerCase()
     const listing = picker.data.listings.get(completionBase.value)
     return (listing?.entries ?? [])
       .filter((entry) => (tree.showSystem.value || !entry.system) && entry.name.toLowerCase().startsWith(stem))

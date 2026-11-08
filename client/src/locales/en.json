@@ -11824,7 +11824,7 @@
         "checkHint": "Each folder is checked as soon as you add it. A folder another library already reads is flagged, because both libraries would import the same files.",
         "checkHintOneLibrary": "Each folder is checked as soon as you add it. A folder can belong to only one library, so one that overlaps a folder of another library cannot be added.",
         "emptyHint": "Paste a server path below, or browse for one.",
-        "pastePlaceholder": "Paste a server path, e.g. /books/Sci-Fi",
+        "pastePlaceholder": "Paste a server path, e.g. /books/Sci-Fi or D:\\Books",
         "browse": "Browse...",
         "status": {
           "checking": "Checking",
@@ -11838,7 +11838,7 @@
         },
         "errors": {
           "empty": "Enter a server folder path.",
-          "notAbsolute": "Enter an absolute server path beginning with /.",
+          "notAbsolute": "Enter a full server path, such as /books, D:\\Books or a network share.",
           "duplicate": "That folder has already been added.",
           "covered": "That folder is already covered by {path}."
         }

@@ -21,7 +21,7 @@ describe('LibraryCreatorFolders', () => {
     await wrapper.get('form').trigger('submit')
 
     expect(wrapper.emitted('update:folders')).toBeUndefined()
-    expect(wrapper.get('#manual-folder-error').text()).toBe('Enter an absolute server path beginning with /.')
+    expect(wrapper.get('#manual-folder-error').text()).toBe('Enter a full server path, such as /books, D:\\Books or a network share.')
     expect(wrapper.get('#manual-folder-path').attributes('aria-describedby')).toBe('manual-folder-error')
   })
 

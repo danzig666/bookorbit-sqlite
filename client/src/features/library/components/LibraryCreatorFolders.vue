@@ -91,7 +91,7 @@ function statusOf(check: FolderCheck | undefined): FolderStatus {
 }
 
 function splitPath(path: string): { parent: string; leaf: string } {
-  const index = path.lastIndexOf('/')
+  const index = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   if (index < 0) return { parent: '', leaf: path }
   return { parent: path.slice(0, index + 1), leaf: path.slice(index + 1) }
 }

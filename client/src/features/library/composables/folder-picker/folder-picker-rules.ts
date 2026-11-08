@@ -1,5 +1,5 @@
 import type { FolderSummary, OrganizationMode } from '@bookorbit/types'
-import { consolidateFolderPaths, normalizeFolderPath } from '../folder-paths'
+import { consolidateFolderPaths, folderLeafName, isPathInside, normalizeFolderPath, parentFolderPath } from '../folder-paths'
 
 export interface PickerLibrary {
   id: number | null
@@ -39,9 +39,7 @@ export interface StatusContext {
 }
 
 export function isInside(path: string, parent: string): boolean {
-  const a = normalizeFolderPath(path)
-  const b = normalizeFolderPath(parent)
-  return a !== b && (b === '/' ? a.startsWith('/') : a.startsWith(`${b}/`))
+  return isPathInside(path, parent)
 }
 
 export function isAtOrInside(path: string, parent: string): boolean {
@@ -49,9 +47,7 @@ export function isAtOrInside(path: string, parent: string): boolean {
 }
 
 export function parentPath(path: string): string {
-  const parts = normalizeFolderPath(path).split('/').filter(Boolean)
-  parts.pop()
-  return parts.length ? `/${parts.join('/')}` : '/'
+  return parentFolderPath(path)
 }
 
 /** Folders between `root` (exclusive) and `path` (exclusive), outermost first. */
@@ -63,8 +59,7 @@ export function ancestorsWithin(path: string, root: string): string[] {
 }
 
 export function leafName(path: string): string {
-  const normalized = normalizeFolderPath(path)
-  return normalized === '/' ? '/' : normalized.slice(normalized.lastIndexOf('/') + 1)
+  return folderLeafName(path)
 }
 
 /** Another library already reading this folder, a folder around it, or a folder inside it. */

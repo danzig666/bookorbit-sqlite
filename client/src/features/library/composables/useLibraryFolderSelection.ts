@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { i18n } from '@/i18n'
-import { consolidateFolderPaths, coveringFolderPath, normalizeFolderPath } from './folder-paths'
+import { consolidateFolderPaths, coveringFolderPath, isAbsoluteFolderPath, normalizeFolderPath } from './folder-paths'
 
 interface FolderSelectionOptions {
   folders: () => string[]
@@ -54,7 +54,7 @@ export function useLibraryFolderSelection(options: FolderSelectionOptions) {
       manualError.value = i18n.global.t('library.creator.folders.errors.empty')
       return
     }
-    if (!path.startsWith('/')) {
+    if (!isAbsoluteFolderPath(path)) {
       manualError.value = i18n.global.t('library.creator.folders.errors.notAbsolute')
       return
     }

@@ -1,6 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import type { FolderListing, FolderListingEntry } from '@bookorbit/types'
-import { normalizeFolderPath } from '../folder-paths'
+import { folderSegments, normalizeFolderPath } from '../folder-paths'
 import { ancestorsWithin, isAtOrInside, isInside, leafName } from './folder-picker-rules'
 import type { FolderPickerData } from './useFolderPickerData'
 
@@ -18,7 +18,7 @@ export interface TreeRow {
 
 export type TreeSort = 'name' | 'books'
 
-const segments = (path: string) => normalizeFolderPath(path).split('/').filter(Boolean)
+const segments = folderSegments
 
 function comparePaths(a: string, b: string): number {
   const left = segments(a)
