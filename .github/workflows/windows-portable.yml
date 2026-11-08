@@ -1,0 +1,286 @@
+name: Windows portable
+
+on:
+  push:
+    tags: ["windows-v*"]
+    branches: ["**"]
+    paths:
+      - "packaging/windows/**"
+      - ".github/workflows/windows-portable.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "26"
+  PNPM_VERSION: "11"
+  POSTGRES_VERSION: "18.4-1"
+  PGVECTOR_VERSION: "v0.8.7"
+  KEPUBIFY_VERSION: "v4.0.4"
+  POPPLER_VERSION: "v26.09.0-0"
+  FFMPEG_ASSET: "ffmpeg-master-latest-win64-lgpl-shared"
+
+jobs:
+  build:
+    name: Build portable executable
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      # Publishing a release on a windows-v* tag needs write access.
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/windows-v* ]]; then
+            version="${GITHUB_REF#refs/tags/windows-v}"
+          else
+            version="0.0.0-dev.${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js and pnpm
+        uses: ./.github/actions/setup-node-pnpm
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install: "false"
+
+      - name: Install dependencies
+        shell: bash
+        env:
+          ONNXRUNTIME_NODE_INSTALL: skip
+        run: pnpm install --frozen-lockfile --filter "server..." --filter "client..."
+
+      - name: Build client
+        shell: bash
+        run: pnpm --config.verify-deps-before-run=false --filter client run build-only
+
+      - name: Build server
+        shell: bash
+        run: pnpm --config.verify-deps-before-run=false --filter server run build
+
+      - name: Stage app
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = 'build/runtime/app'
+          pnpm --config.verify-deps-before-run=false --config.allow-unused-patches=true --config.node-linker=hoisted --filter server deploy --prod --legacy $app
+          if ($LASTEXITCODE -ne 0) { throw 'pnpm deploy failed' }
+          Copy-Item server/dist "$app/dist" -Recurse -Force
+          New-Item -ItemType Directory -Force "$app/migrations" | Out-Null
+          Copy-Item server/src/db/migrations/* "$app/migrations" -Recurse -Force
+          Copy-Item client/dist "$app/public" -Recurse -Force
+          Copy-Item client/src/locales "$app/locales" -Recurse -Force
+          New-Item -ItemType Directory -Force "$app/koreader-plugin" | Out-Null
+          Copy-Item koreader-plugin/bookorbit.koplugin "$app/koreader-plugin/bookorbit.koplugin" -Recurse -Force
+          Copy-Item LICENSE, NOTICE, ADDITIONAL_TERMS.md $app -Force
+          Remove-Item "$app/bin/kepubify" -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$app/bin/kepubify" | Out-Null
+          curl.exe -fsSL -o "$app/bin/kepubify/kepubify-windows-64bit.exe" "https://github.com/pgaskin/kepubify/releases/download/$env:KEPUBIFY_VERSION/kepubify-windows-64bit.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'kepubify download failed' }
+          Remove-Item "$app/src", "$app/test" -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force build/runtime/node | Out-Null
+          Copy-Item (Get-Command node).Source build/runtime/node/node.exe
+
+      - name: Cache PostgreSQL download
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/downloads/postgresql.zip
+          key: postgresql-windows-${{ env.POSTGRES_VERSION }}
+
+      - name: Download PostgreSQL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build/downloads, build/pg | Out-Null
+          if (-not (Test-Path build/downloads/postgresql.zip)) {
+            curl.exe -fsSL -o build/downloads/postgresql.zip "https://get.enterprisedb.com/postgresql/postgresql-$env:POSTGRES_VERSION-windows-x64-binaries.zip"
+            if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL download failed' }
+          }
+          & "$env:SystemRoot\System32\tar.exe" -xf build/downloads/postgresql.zip -C build/pg --exclude "pgsql/pgAdmin 4" --exclude "pgsql/doc" --exclude "pgsql/StackBuilder"
+          if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL extract failed' }
+
+      - name: Build pgvector
+        shell: cmd
+        run: |
+          git clone --depth 1 --branch %PGVECTOR_VERSION% https://github.com/pgvector/pgvector.git build\pgvector || exit /b 1
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          set "PGROOT=%GITHUB_WORKSPACE%\build\pg\pgsql"
+          cd build\pgvector
+          nmake /NOLOGO /F Makefile.win || exit /b 1
+          nmake /NOLOGO /F Makefile.win install || exit /b 1
+
+      - name: Stage PostgreSQL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = 'build/pg/pgsql'
+          $dst = 'build/runtime/pgsql'
+          New-Item -ItemType Directory -Force "$dst/bin", "$dst/lib", "$dst/share" | Out-Null
+          Copy-Item "$src/bin/*" "$dst/bin" -Recurse -Force
+          Remove-Item "$dst/bin/wx*.dll", "$dst/bin/stackbuilder.exe", "$dst/bin/*.lib", "$dst/bin/testplug.dll" -Force -ErrorAction SilentlyContinue
+          Copy-Item "$src/lib/*.dll" "$dst/lib" -Force
+          Copy-Item "$src/share/*" "$dst/share" -Recurse -Force
+          foreach ($dll in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
+            Copy-Item "$env:SystemRoot\System32\$dll" "$dst/bin" -Force
+          }
+          Copy-Item "$src/server_license.txt" "$dst/LICENSE.txt" -Force
+          if (-not (Test-Path "$dst/lib/vector.dll")) { throw 'vector.dll missing' }
+          if (-not (Test-Path "$dst/share/extension/vector.control")) { throw 'vector.control missing' }
+
+      - name: Stage tools
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build/tools-src, build/runtime/tools/ffmpeg/bin, build/runtime/tools/poppler/bin | Out-Null
+
+          gh release download latest --repo BtbN/FFmpeg-Builds --pattern "$env:FFMPEG_ASSET.zip" --dir build/tools-src
+          if ($LASTEXITCODE -ne 0) { throw 'ffmpeg download failed' }
+          & "$env:SystemRoot\System32\tar.exe" -xf "build/tools-src/$env:FFMPEG_ASSET.zip" -C build/tools-src
+          Copy-Item "build/tools-src/$env:FFMPEG_ASSET/bin/*" build/runtime/tools/ffmpeg/bin -Force
+          Remove-Item build/runtime/tools/ffmpeg/bin/ffplay.exe -Force -ErrorAction SilentlyContinue
+          Copy-Item "build/tools-src/$env:FFMPEG_ASSET/LICENSE.txt" build/runtime/tools/ffmpeg/LICENSE.txt -Force -ErrorAction SilentlyContinue
+
+          gh release download $env:POPPLER_VERSION --repo oschwartz10612/poppler-windows --pattern "Release-*.zip" --dir build/tools-src
+          if ($LASTEXITCODE -ne 0) { throw 'poppler download failed' }
+          $popplerZip = Get-ChildItem build/tools-src/Release-*.zip | Select-Object -First 1
+          New-Item -ItemType Directory -Force build/tools-src/poppler | Out-Null
+          & "$env:SystemRoot\System32\tar.exe" -xf $popplerZip.FullName -C build/tools-src/poppler
+          $pdftoppm = Get-ChildItem build/tools-src/poppler -Recurse -Filter pdftoppm.exe | Select-Object -First 1
+          if (-not $pdftoppm) { throw 'pdftoppm.exe not found in poppler archive' }
+          Copy-Item "$($pdftoppm.DirectoryName)/*" build/runtime/tools/poppler/bin -Recurse -Force
+
+          & build/runtime/tools/ffmpeg/bin/ffprobe.exe -version | Select-Object -First 1
+          & build/runtime/tools/poppler/bin/pdfinfo.exe -v
+
+      - name: Build executable
+        shell: bash
+        run: |
+          mkdir -p dist-portable
+          node packaging/windows/build.mjs \
+            --runtime build/runtime \
+            --version "${{ steps.version.outputs.version }}" \
+            --out "dist-portable/BookOrbit-${{ steps.version.outputs.version }}-windows-x64.exe"
+
+      - name: Smoke test
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Resolve-Path "dist-portable/BookOrbit-$env:VERSION-windows-x64.exe"
+          $testDir = Join-Path $env:RUNNER_TEMP 'portable-test'
+          New-Item -ItemType Directory -Force $testDir | Out-Null
+          Copy-Item $exe "$testDir/BookOrbit.exe"
+          $home_ = Join-Path $testDir 'BookOrbit-data'
+
+          function Invoke-Launch([string]$label) {
+            $proc = Start-Process -FilePath "$testDir/BookOrbit.exe" -ArgumentList '--no-browser' -WorkingDirectory $testDir -PassThru -NoNewWindow `
+              -RedirectStandardOutput "$testDir/$label.out" -RedirectStandardError "$testDir/$label.err"
+            $healthy = $false
+            for ($i = 0; $i -lt 180; $i++) {
+              Start-Sleep -Seconds 5
+              if ($proc.HasExited) { break }
+              try {
+                $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:6262/api/v1/health
+                if ($r.StatusCode -eq 200) { $healthy = $true; break }
+              } catch {}
+            }
+            return @{ Process = $proc; Healthy = $healthy }
+          }
+
+          function Show-Logs([string]$label) {
+            Write-Host "----- $label stdout -----"; Get-Content "$testDir/$label.out" -ErrorAction SilentlyContinue
+            Write-Host "----- $label stderr -----"; Get-Content "$testDir/$label.err" -ErrorAction SilentlyContinue
+            Get-ChildItem "$home_/logs" -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "----- $($_.Name) -----"; Get-Content $_.FullName -Tail 200
+            }
+          }
+
+          function Stop-All {
+            Get-Process -Name BookOrbit, node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            $pgCtl = Get-ChildItem "$home_/runtime" -Recurse -Filter pg_ctl.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($pgCtl) { & $pgCtl.FullName stop -D "$home_/postgres" -m fast -w 2>&1 | Out-Host }
+          }
+
+          $first = Invoke-Launch 'first'
+          if (-not $first.Healthy) { Show-Logs 'first'; Stop-All; throw 'First start did not become healthy' }
+          Write-Host 'First start is healthy.'
+
+          $settings = @{}
+          Get-Content "$home_/bookorbit.env" | Where-Object { $_ -match '^[A-Z_]+=' } | ForEach-Object {
+            $k, $v = $_ -split '=', 2; $settings[$k] = $v
+          }
+          $psql = Get-ChildItem "$home_/runtime" -Recurse -Filter psql.exe | Select-Object -First 1
+          $env:PGPASSWORD = $settings['BOOKORBIT_DB_PASSWORD']
+          $extensions = & $psql.FullName -h 127.0.0.1 -p 54329 -U bookorbit -d bookorbit -tAc "SELECT string_agg(extname || ' ' || extversion, ', ' ORDER BY extname) FROM pg_extension"
+          Write-Host "Extensions: $extensions"
+          if ($extensions -notmatch 'vector') { Show-Logs 'first'; Stop-All; throw 'pgvector extension is not installed' }
+          $vectorCheck = & $psql.FullName -h 127.0.0.1 -p 54329 -U bookorbit -d bookorbit -tAc "SELECT '[1,2,3]'::vector <-> '[1,2,4]'::vector"
+          Write-Host "Vector distance: $vectorCheck"
+          if ("$vectorCheck".Trim() -ne '1') { Stop-All; throw 'pgvector query failed' }
+
+          $index = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:6262/
+          if ($index.Content -notmatch '<div id="app"') { Show-Logs 'first'; Stop-All; throw 'Client page was not served' }
+          Show-Logs 'first'
+          Stop-All
+
+          Write-Host 'Restarting against the existing data folder.'
+          $second = Invoke-Launch 'second'
+          if (-not $second.Healthy) { Show-Logs 'second'; Stop-All; throw 'Second start did not become healthy' }
+          Show-Logs 'second'
+          Stop-All
+          Write-Host 'Smoke test passed.'
+
+      - name: Upload executable
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: BookOrbit-windows-x64
+          path: dist-portable/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/windows-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > notes.md <<EOF
+          Portable Windows build of BookOrbit with an embedded PostgreSQL ${POSTGRES_VERSION%-*} (pgvector ${PGVECTOR_VERSION}, pg_trgm, unaccent). No Docker or separate database install is needed.
+
+          ## How to use
+
+          1. Put \`BookOrbit-${VERSION}-windows-x64.exe\` in its own folder, for example \`D:\\BookOrbit\`.
+          2. Double-click it. The first start unpacks the runtime and creates the database, which takes a minute or two.
+          3. Your browser opens http://localhost:6262. Enter the setup token printed in the console window (also stored in \`BookOrbit-data\\bookorbit.env\`) to create the admin account.
+          4. Close the console window or press Ctrl+C to stop BookOrbit.
+
+          Everything BookOrbit stores lives in the \`BookOrbit-data\` folder next to the executable: the database, covers, settings and logs. Copy the executable and that folder together to move or back up the install (stop BookOrbit first).
+
+          Settings such as the port and the library folder picker root (\`LIBRARY_BROWSE_ROOT\`, for example \`D:\\Books\`) are in \`BookOrbit-data\\bookorbit.env\`.
+
+          Bundled tools: kepubify ${KEPUBIFY_VERSION}, FFmpeg (LGPL build), Poppler ${POPPLER_VERSION}. DjVu files are not supported in the portable build because DjVuLibre is not bundled.
+          EOF
+          gh release create "$TAG" dist-portable/*.exe \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "BookOrbit ${VERSION} for Windows (portable)" \
+            --notes-file notes.md
